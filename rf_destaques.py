@@ -9,7 +9,7 @@ SHEET_NAME = "Crédito bancário"
 
 st.set_page_config(page_title="RF | Destaques Crédito Bancário", layout="wide")
 st.title("RF | Destaques Crédito Bancário")
-st.caption('Lê apenas a aba "Crédito bancário" e monta Top 5 por indexador e horizonte de prazo.')
+st.caption('Lê apenas a aba "Crédito bancário" (cabeçalho fixo na linha 6) e monta Top 5 por indexador e prazo.')
 
 # -----------------------------
 # Helpers
@@ -38,12 +38,8 @@ def to_numeric_series(s: pd.Series) -> pd.Series:
         return pd.to_numeric(s, errors="coerce")
 
     s2 = s.astype(str).str.strip()
-
-    # BR: 1.234,56 -> 1234.56
     s2 = s2.str.replace(".", "", regex=False)
     s2 = s2.str.replace(",", ".", regex=False)
-
-    # pega primeiro número em textos como "360 dias"
     extracted = s2.str.extract(r"(-?\d+(\.\d+)?)", expand=True)[0]
     return pd.to_numeric(extracted, errors="coerce")
 
@@ -68,15 +64,12 @@ def classify_indexer(raw) -> str | None:
         return None
     t = str(raw).strip().upper()
 
-    # IPCA
     if "IPCA" in t:
         return "IPCA"
 
-    # Pós (CDI)
     if "CDI" in t or "PÓS" in t or "POS" in t or t == "DI":
         return "Pós (CDI)"
 
-    # Pré
     if "PRÉ" in t or "PRE" in t or "FIXA" in t:
         return "Pré"
 
@@ -119,7 +112,7 @@ def top_n_block(df: pd.DataFrame, idx_label: str, horizon_label: str, n: int) ->
     return sub.head(n)
 
 # -----------------------------
-# Fast Excel reader (openpyxl read_only)
+# Fast Excel reader (openpyxl read_only) - header fixed at row 6
 # -----------------------------
 @st.cache_data(show_spinner=False)
 def read_credito_bancario_fast(file_bytes: bytes) -> pd.DataFrame:
@@ -131,49 +124,24 @@ def read_credito_bancario_fast(file_bytes: bytes) -> pd.DataFrame:
 
     ws = wb[SHEET_NAME]
 
-    # encontra header nas primeiras 80 linhas
-    header_row_idx = None
-    header_values = None
+    HEADER_ROW = 6  # cabeçalho fixo na linha 6
 
-    for i, row in enumerate(ws.iter_rows(min_row=1, max_row=80, values_only=True), start=1):
-        row_list = [normalize_colname(x) for x in row]
-        joined = " | ".join(row_list).lower()
-
-        # heurística: precisa ter emissor e algo de taxa/indexador
-        if "emissor" in joined and ("indexador" in joined or "remun" in joined) and ("tx" in joined or "taxa" in joined):
-            header_row_idx = i
-            header_values = row_list
-            break
-
-    # fallback: só indexador + taxa
-    if header_row_idx is None:
-        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=80, values_only=True), start=1):
-            row_list = [normalize_colname(x) for x in row]
-            joined = " | ".join(row_list).lower()
-            if "indexador" in joined and ("tx" in joined or "taxa" in joined):
-                header_row_idx = i
-                header_values = row_list
-                break
-
-    if header_row_idx is None:
-        raise ValueError("Não consegui localizar a linha de cabeçalho na aba (detector falhou).")
+    header = [normalize_colname(cell.value) for cell in ws[HEADER_ROW]]
 
     data = []
     empty_streak = 0
 
-    for row in ws.iter_rows(min_row=header_row_idx + 1, values_only=True):
+    for row in ws.iter_rows(min_row=HEADER_ROW + 1, values_only=True):
         if row is None or all((x is None or str(x).strip() == "") for x in row):
             empty_streak += 1
-            if empty_streak >= 25:
+            if empty_streak >= 20:
                 break
             continue
         empty_streak = 0
         data.append(list(row))
 
-    max_len = max(len(header_values), max((len(r) for r in data), default=0))
-    header = header_values + [""] * (max_len - len(header_values))
-    df = pd.DataFrame(data, columns=[normalize_colname(c) for c in header])
-
+    df = pd.DataFrame(data, columns=header)
+    df.columns = [normalize_colname(c) for c in df.columns]
     df = df.dropna(axis=1, how="all")
     return df
 
@@ -208,7 +176,7 @@ with st.spinner('Lendo a aba "Crédito bancário"...'):
 
 raw.columns = [normalize_colname(c) for c in raw.columns]
 
-# Detect columns (o detector aceita variações)
+# Detect columns
 col_emissor = find_col(raw, ["Emissor", "Banco", "Instituição", "Instituicao"])
 col_produto = find_col(raw, ["Produto", "Ativo", "Tipo"])
 col_indexador = find_col(raw, ["Indexador", "Remuneração", "Remuneracao", "Benchmark"])
@@ -249,7 +217,7 @@ df["taxa_num"] = df[col_taxa].apply(parse_rate_value)
 if col_min_app is not None:
     df["_min_app_num"] = to_numeric_series(df[col_min_app])
 
-# rating filter (mapeamento simples, funciona bem no dia a dia)
+# rating filter (mapeamento simples)
 if use_rating_filter and col_rating is not None:
     rating_map = {
         "AAA": 1, "AA+": 2, "AA": 3, "AA-": 4,
