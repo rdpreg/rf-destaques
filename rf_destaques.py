@@ -175,7 +175,7 @@ df = read_credito_bancario_fast(uploaded.getvalue())
 col_emissor = find_col(df, ["Emissor"])
 col_produto = find_col(df, ["Produto"])
 col_indexador = find_col(df, ["Indexador"])
-col_taxa = find_col(df, ["Tx", "Taxa", "Máxima", "Maxima"])
+col_taxa = find_col(df, ["Tx. Portal", "Taxa Portal"])
 col_prazo = find_col(df, ["Prazo"])
 col_venc = find_col(df, ["Vencimento"])
 col_min = find_col(df, ["Aplicação", "Aplicacao", "mínima", "minima"])
@@ -189,7 +189,7 @@ if not col_produto:
 if not col_indexador:
     missing.append("Indexador")
 if not col_taxa:
-    missing.append("Tx. Máxima/Taxa")
+    missing.append("Tx. Portal/Taxa Portal")
 if not col_prazo and not col_venc:
     missing.append("Prazo ou Vencimento")
 if not col_min:
