@@ -77,35 +77,55 @@ def classify_indexer(raw) -> str | None:
 
 def parse_rate_value(x) -> float | None:
     """
-    Converte taxa textual para número (para ordenar).
-    - Pós (%CDI): "1.0512" ou "105,12" ou "105,12% CDI" -> 1.0512 (se vier como 1.x) ou 105.12 (se vier já em %)
-    - IPCA/Pré: "8,20% a.a." -> 8.2
+    Retorna um número "limpo" para ordenar.
+    - Se vier float/int: retorna direto (não mexe em separadores).
+    - Se vier texto: faz parse respeitando decimal BR/US.
     """
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
 
+    # Se já é número, não transforma em string para não explodir (caso 1.0152277617581392)
+    if isinstance(x, (int, float)) and not (isinstance(x, float) and pd.isna(x)):
+        try:
+            return float(x)
+        except:
+            return None
+
     s = str(x).strip().upper()
+    if s == "":
+        return None
+
+    # remove símbolos e textos
     s = s.replace("%", "")
     s = s.replace("A.A.", "").replace("AA", "").replace("A A", "")
     s = s.replace(" ", "")
 
-    # 13,45 -> 13.45 e 1.234,56 -> 1234.56
-    s = s.replace(".", "")
-    s = s.replace(",", ".")
-
-    m = re.search(r"(-?\d+(\.\d+)?)", s)
+    # extrai primeiro número com possível separador
+    m = re.search(r"(-?\d[\d\.,]*)", s)
     if not m:
         return None
+
+    num = m.group(1)
+
+    # heurística de separador:
+    # se tem '.' e ',' ao mesmo tempo: assume '.' milhar e ',' decimal (BR)
+    if "." in num and "," in num:
+        num = num.replace(".", "").replace(",", ".")
+    # se tem só ',' assume decimal BR
+    elif "," in num:
+        num = num.replace(",", ".")
+    # se tem só '.' assume decimal US, não mexe
+
     try:
-        return float(m.group(1))
+        return float(num)
     except:
         return None
 
 def format_rate_for_display(rate_num, indexador_pad) -> str:
     """
-    Formata a taxa para exibição no padrão da planilha:
-    - Pós (CDI): 1.0512 -> 105,12%  |  105.12 -> 105,12%
-    - IPCA/Pré: 8.2 -> 8,20%
+    Formata taxa para exibição:
+    - Pós (CDI): se vier 1.0512 -> 105,12%
+    - IPCA/Pré: se vier 0.082 -> 8,20%  | se vier 8.2 -> 8,20%
     """
     if rate_num is None or (isinstance(rate_num, float) and pd.isna(rate_num)):
         return ""
@@ -116,11 +136,15 @@ def format_rate_for_display(rate_num, indexador_pad) -> str:
         return ""
 
     if indexador_pad == "Pós (CDI)":
-        # se vier como 1.0512, converte para 105.12
+        # 1.0512 => 105.12
         val = val * 100 if val <= 2 else val
         return f"{val:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
 
-    # IPCA/Pré
+    # IPCA / Pré
+    # se vier em decimal (0.082), converte para percentual (8.2)
+    if val <= 1.5:
+        val = val * 100
+
     return f"{val:.2f}%".replace(".", ",")
 
 def download_csv(df: pd.DataFrame) -> bytes:
@@ -144,7 +168,7 @@ def read_credito_bancario_fast(file_bytes: bytes) -> pd.DataFrame:
 
     ws = wb[SHEET_NAME]
 
-    HEADER_ROW = 6  # cabeçalho fixo na linha 6
+    HEADER_ROW = 6
     header = [normalize_colname(cell.value) for cell in ws[HEADER_ROW]]
 
     data = []
@@ -195,7 +219,6 @@ with st.spinner('Lendo a aba "Crédito bancário"...'):
 
 raw.columns = [normalize_colname(c) for c in raw.columns]
 
-# Detect columns
 col_emissor = find_col(raw, ["Emissor", "Banco", "Instituição", "Instituicao"])
 col_produto = find_col(raw, ["Produto", "Ativo", "Tipo"])
 col_indexador = find_col(raw, ["Indexador", "Remuneração", "Remuneracao", "Benchmark"])
@@ -220,7 +243,6 @@ if missing:
 
 df = raw.copy()
 
-# prazo em dias
 if col_prazo is not None:
     df["prazo_dias"] = to_numeric_series(df[col_prazo])
 else:
@@ -231,17 +253,12 @@ else:
 df["horizonte"] = df["prazo_dias"].apply(categorize_horizon)
 df["indexador_pad"] = df[col_indexador].apply(classify_indexer)
 
-# taxa numérica para ordenar
 df["taxa_num"] = df[col_taxa].apply(parse_rate_value)
-
-# taxa formatada para exibir
 df["taxa_fmt"] = df.apply(lambda r: format_rate_for_display(r["taxa_num"], r["indexador_pad"]), axis=1)
 
-# aplicação mínima numérica (se existir)
 if col_min_app is not None:
     df["_min_app_num"] = to_numeric_series(df[col_min_app])
 
-# rating filter (mapeamento simples)
 if use_rating_filter and col_rating is not None:
     rating_map = {
         "AAA": 1, "AA+": 2, "AA": 3, "AA-": 4,
@@ -265,11 +282,9 @@ if use_rating_filter and col_rating is not None:
     else:
         df = df[df["_rating_score"].notna() & (df["_rating_score"] <= min_score)].copy()
 
-# aplicação mínima filter
 if use_min_app_filter and max_min_app > 0 and col_min_app is not None:
     df = df[df["_min_app_num"].notna() & (df["_min_app_num"] <= float(max_min_app))].copy()
 
-# mantém só linhas úteis
 df = df[df["horizonte"].notna() & df["indexador_pad"].notna() & df["taxa_num"].notna()].copy()
 
 st.subheader("Base tratada")
@@ -311,7 +326,6 @@ for i, idx in enumerate(indexers_order):
                 else:
                     st.dataframe(b[show_cols], use_container_width=True, height=260)
 
-# consolidado download
 blocks = []
 for idx in indexers_order:
     for hz in horizons_order:
