@@ -197,3 +197,67 @@ for i, idx in enumerate(indexers):
                         use_container_width=True,
                         height=260,
                     )
+
+def build_message(df, top_n, col_emissor, col_produto, col_rating):
+    hoje = datetime.now().strftime("%d/%m/%Y")
+
+    def linhas_por_indexador(indexador_label):
+        sub = df[df["indexador_pad"] == indexador_label].copy()
+        sub = sub.sort_values("taxa_num", ascending=False).head(int(top_n))
+
+        if sub.empty:
+            return ["- (sem ativos hoje)"]
+
+        linhas = []
+        for _, r in sub.iterrows():
+            emissor = str(r.get(col_emissor, "")).strip()
+            produto = str(r.get(col_produto, "")).strip()
+            taxa = str(r.get("taxa_fmt", "")).strip()
+            venc = str(r.get("venc_fmt", "")).strip()
+            amin = str(r.get("aplic_min_fmt", "")).strip()
+            rating = str(r.get(col_rating, "")).strip() if col_rating else ""
+
+            # monta a linha no estilo whatsapp
+            # Ex: - Banco X | CDB | 105,12% | Venc: 16/04/2026 | Min: R$ 10.000 | Rating: AA
+            parts = [emissor, produto, taxa]
+            extra = []
+            if venc:
+                extra.append(f"Venc: {venc}")
+            if amin:
+                extra.append(f"Min: {amin}")
+            if rating and rating != "nan":
+                extra.append(f"Rating: {rating}")
+
+            line = " - " + " | ".join([p for p in parts if p and p != "nan"])
+            if extra:
+                line += " | " + " | ".join(extra)
+
+            linhas.append(line)
+
+        return linhas
+
+    pos = "\n".join(linhas_por_indexador("Pós (CDI)"))
+    pre = "\n".join(linhas_por_indexador("Pré"))
+    ipca = "\n".join(linhas_por_indexador("IPCA"))
+
+    msg = (
+        f"*Destaques de ativos bancários* {hoje}\n\n"
+        f"*Pós-fixado*\n{pos}\n\n"
+        f"*Pré-fixado*\n{pre}\n\n"
+        f"*IPCA*\n{ipca}\n"
+    )
+    return msg
+
+st.divider()
+st.subheader("Mensagem pronta para enviar no grupo")
+
+msg = build_message(df, top_n=5, col_emissor=col_emissor, col_produto=col_produto, col_rating=col_rating)
+
+st.text_area("Copie e cole no WhatsApp", value=msg, height=320)
+
+st.download_button(
+    "Baixar mensagem (.txt)",
+    data=msg.encode("utf-8"),
+    file_name=f"destaques_bancarios_{datetime.now().strftime('%Y%m%d')}.txt",
+    mime="text/plain",
+)
