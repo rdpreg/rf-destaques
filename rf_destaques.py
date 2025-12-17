@@ -198,62 +198,51 @@ for i, idx in enumerate(indexers):
                         height=260,
                     )
 
-def build_message(df, top_n, col_emissor, col_produto, col_rating):
-    hoje = datetime.now().strftime("%d/%m/%Y")
+def build_whatsapp_message(df, top_n, col_emissor, col_produto):
+    data_envio = datetime.now().strftime("%d/%m/%Y")
 
-    def linhas_por_indexador(indexador_label):
+    def format_card(row):
+        emissor = str(row.get(col_emissor, "")).strip()
+        produto = str(row.get(col_produto, "")).strip()
+        taxa = str(row.get("taxa_fmt", "")).strip()
+        venc = str(row.get("venc_fmt", "")).strip()
+        amin = str(row.get("aplic_min_fmt", "")).strip()
+
+        titulo = f"{produto} {emissor}".strip()
+
+        return (
+            f"🏦**{titulo}**\n"
+            f"⏰ Vencimento: {venc}\n"
+            f"📈 Taxa: {taxa}\n"
+            f"💰mínimo: {amin}\n"
+        )
+
+    def section(indexador_label, section_title):
         sub = df[df["indexador_pad"] == indexador_label].copy()
         sub = sub.sort_values("taxa_num", ascending=False).head(int(top_n))
 
         if sub.empty:
-            return ["- (sem ativos hoje)"]
+            return f"📍*{section_title}*\n- (sem ativos hoje)\n\n"
 
-        linhas = []
-        for _, r in sub.iterrows():
-            emissor = str(r.get(col_emissor, "")).strip()
-            produto = str(r.get(col_produto, "")).strip()
-            taxa = str(r.get("taxa_fmt", "")).strip()
-            venc = str(r.get("venc_fmt", "")).strip()
-            amin = str(r.get("aplic_min_fmt", "")).strip()
-            rating = str(r.get(col_rating, "")).strip() if col_rating else ""
-
-            # monta a linha no estilo whatsapp
-            # Ex: - Banco X | CDB | 105,12% | Venc: 16/04/2026 | Min: R$ 10.000 | Rating: AA
-            parts = [emissor, produto, taxa]
-            extra = []
-            if venc:
-                extra.append(f"Venc: {venc}")
-            if amin:
-                extra.append(f"Min: {amin}")
-            if rating and rating != "nan":
-                extra.append(f"Rating: {rating}")
-
-            line = " - " + " | ".join([p for p in parts if p and p != "nan"])
-            if extra:
-                line += " | " + " | ".join(extra)
-
-            linhas.append(line)
-
-        return linhas
-
-    pos = "\n".join(linhas_por_indexador("Pós (CDI)"))
-    pre = "\n".join(linhas_por_indexador("Pré"))
-    ipca = "\n".join(linhas_por_indexador("IPCA"))
+        cards = "\n".join(format_card(r) for _, r in sub.iterrows())
+        return f"📍*{section_title}*\n{cards}\n"
 
     msg = (
-        f"*Destaques de ativos bancários* {hoje}\n\n"
-        f"*Pós-fixado*\n{pos}\n\n"
-        f"*Pré-fixado*\n{pre}\n\n"
-        f"*IPCA*\n{ipca}\n"
+        "*Destaques de ativos Bancários*\n"
+        f"🚨*TAXAS DE HOJE ({data_envio})*\n\n"
+        + section("Pós (CDI)", "PÓS-FIXADOS")
+        + section("Pré", "PRÉ-FIXADOS")
+        + section("IPCA", "IPCA")
     )
+
     return msg
 
 st.divider()
-st.subheader("Mensagem pronta para enviar no grupo")
+st.subheader("Mensagem para enviar no grupo")
 
-msg = build_message(df, top_n=5, col_emissor=col_emissor, col_produto=col_produto, col_rating=col_rating)
+msg = build_whatsapp_message(df, top_n=5, col_emissor=col_emissor, col_produto=col_produto)
 
-st.text_area("Copie e cole no WhatsApp", value=msg, height=320)
+st.text_area("Copie e cole no WhatsApp", value=msg, height=520)
 
 st.download_button(
     "Baixar mensagem (.txt)",
