@@ -9,7 +9,7 @@ SHEET_NAME = "Crédito bancário"
 
 st.set_page_config(page_title="RF | Destaques Crédito Bancário", layout="wide")
 st.title("RF | Destaques Crédito Bancário")
-st.caption('Lê apenas a aba "Crédito bancário" (cabeçalho fixo na linha 6) e monta Top 5 por indexador e prazo.')
+st.caption('Lê apenas a aba "Crédito bancário" (cabeçalho fixo na linha 6) e monta Top 5 por indexador e prazo, exibindo taxas no padrão da planilha.')
 
 # -----------------------------
 # Helpers
@@ -78,10 +78,8 @@ def classify_indexer(raw) -> str | None:
 def parse_rate_value(x) -> float | None:
     """
     Converte taxa textual para número (para ordenar).
-    Exemplos:
-      "110% CDI" -> 110
-      "IPCA + 7,20%" -> 7.2
-      "13,45% a.a." -> 13.45
+    - Pós (%CDI): "1.0512" ou "105,12" ou "105,12% CDI" -> 1.0512 (se vier como 1.x) ou 105.12 (se vier já em %)
+    - IPCA/Pré: "8,20% a.a." -> 8.2
     """
     if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
@@ -102,6 +100,28 @@ def parse_rate_value(x) -> float | None:
         return float(m.group(1))
     except:
         return None
+
+def format_rate_for_display(rate_num, indexador_pad) -> str:
+    """
+    Formata a taxa para exibição no padrão da planilha:
+    - Pós (CDI): 1.0512 -> 105,12%  |  105.12 -> 105,12%
+    - IPCA/Pré: 8.2 -> 8,20%
+    """
+    if rate_num is None or (isinstance(rate_num, float) and pd.isna(rate_num)):
+        return ""
+
+    try:
+        val = float(rate_num)
+    except:
+        return ""
+
+    if indexador_pad == "Pós (CDI)":
+        # se vier como 1.0512, converte para 105.12
+        val = val * 100 if val <= 2 else val
+        return f"{val:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    # IPCA/Pré
+    return f"{val:.2f}%".replace(".", ",")
 
 def download_csv(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
@@ -125,7 +145,6 @@ def read_credito_bancario_fast(file_bytes: bytes) -> pd.DataFrame:
     ws = wb[SHEET_NAME]
 
     HEADER_ROW = 6  # cabeçalho fixo na linha 6
-
     header = [normalize_colname(cell.value) for cell in ws[HEADER_ROW]]
 
     data = []
@@ -211,7 +230,12 @@ else:
 
 df["horizonte"] = df["prazo_dias"].apply(categorize_horizon)
 df["indexador_pad"] = df[col_indexador].apply(classify_indexer)
+
+# taxa numérica para ordenar
 df["taxa_num"] = df[col_taxa].apply(parse_rate_value)
+
+# taxa formatada para exibir
+df["taxa_fmt"] = df.apply(lambda r: format_rate_for_display(r["taxa_num"], r["indexador_pad"]), axis=1)
 
 # aplicação mínima numérica (se existir)
 if col_min_app is not None:
@@ -252,10 +276,10 @@ st.subheader("Base tratada")
 st.caption(f"Linhas úteis: {len(df):,}".replace(",", "."))
 
 preview_cols = []
-for c in [col_emissor, col_produto, col_indexador, col_taxa, col_prazo, col_venc, col_min_app, col_rating]:
+for c in [col_emissor, col_produto, col_indexador, col_prazo, col_venc, col_min_app, col_rating]:
     if c is not None and c in df.columns and c not in preview_cols:
         preview_cols.append(c)
-preview_cols += [c for c in ["prazo_dias", "horizonte", "indexador_pad", "taxa_num"] if c in df.columns]
+preview_cols += ["taxa_fmt", "prazo_dias", "horizonte", "indexador_pad"]
 
 st.dataframe(df[preview_cols].head(80), use_container_width=True, height=340)
 
@@ -276,12 +300,11 @@ for i, idx in enumerate(indexers_order):
                 b = top_n_block(df, idx, hz, int(top_n))
 
                 show_cols = []
-                for c in [col_emissor, col_produto, col_indexador, col_taxa, col_min_app, col_rating, col_venc]:
+                for c in [col_emissor, col_produto, col_indexador, "taxa_fmt", col_min_app, col_rating, col_venc]:
                     if c is not None and c in b.columns and c not in show_cols:
                         show_cols.append(c)
-                for c in ["prazo_dias", "taxa_num"]:
-                    if c in b.columns and c not in show_cols:
-                        show_cols.append(c)
+                if "prazo_dias" in b.columns:
+                    show_cols.append("prazo_dias")
 
                 if b.empty:
                     st.info("Sem ativos nesse bloco.")
