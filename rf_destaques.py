@@ -207,6 +207,7 @@ def build_whatsapp_message(df, top_n, col_emissor, col_produto):
         taxa = str(row.get("taxa_fmt", "")).strip()
         venc = str(row.get("venc_fmt", "")).strip()
         amin = str(row.get("aplic_min_fmt", "")).strip()
+        indexador = row.get("indexador_pad", "")
 
         titulo = f"{produto} {emissor}".strip()
 
