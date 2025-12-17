@@ -211,7 +211,7 @@ def build_whatsapp_message(df, top_n, col_emissor, col_produto):
         titulo = f"{produto} {emissor}".strip()
 
         return (
-            f"🏦**{titulo}**\n"
+            f"🏦*{titulo}*\n"
             f"⏰ Vencimento: {venc}\n"
             f"📈 Taxa: {taxa}\n"
             f"💰mínimo: {amin}\n"
