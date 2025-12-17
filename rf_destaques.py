@@ -210,6 +210,12 @@ def build_whatsapp_message(df, top_n, col_emissor, col_produto):
 
         titulo = f"{produto} {emissor}".strip()
 
+            # Ajuste da taxa para IPCA
+        if indexador == "IPCA" and taxa:
+            taxa_exibicao = f"IPCA+ {taxa}"
+        else:
+            taxa_exibicao = taxa
+
         return (
             f"🏦*{titulo}*\n"
             f"⏰ Vencimento: {venc}\n"
