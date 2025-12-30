@@ -22,7 +22,10 @@ HEADER_PUBLICOS = 5  # no seu arquivo, títulos costuma estar na linha 5
 # =============================
 st.set_page_config(page_title="RF | Destaques (V2)", layout="wide")
 st.title("RF | Destaques RF (V2)")
-st.caption("Crédito bancário + Títulos públicos (NTN-B) com mensagens prontas para WhatsApp + envio via Z-API (secrets).")
+st.caption(
+    "Crédito bancário + Títulos públicos (NTN-B) com mensagens prontas para WhatsApp "
+    "e envio via Z-API usando secrets."
+)
 
 # =============================
 # Helpers
@@ -137,7 +140,14 @@ def copy_button(text: str, label: str = "Copiar"):
 # =============================
 # Z-API sender (secrets)
 # =============================
-def zapi_send_text(instance_id: str, instance_token: str, client_token: str, phone_or_group: str, message: str, delay_message: int = 0):
+def zapi_send_text(
+    instance_id: str,
+    instance_token: str,
+    client_token: str,
+    phone_or_group: str,
+    message: str,
+    delay_message: int = 0
+):
     url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/send-text"
     headers = {
         "Client-Token": client_token,
@@ -151,7 +161,15 @@ def zapi_send_text(instance_id: str, instance_token: str, client_token: str, pho
     r.raise_for_status()
     return r.json()
 
-def send_many_messages(instance_id, instance_token, client_token, group_id, messages, delay_between=2.0, api_delay_message=0):
+def send_many_messages(
+    instance_id: str,
+    instance_token: str,
+    client_token: str,
+    group_id: str,
+    messages: list[str],
+    delay_between: float = 2.0,
+    api_delay_message: int = 0
+):
     results = []
     for i, msg in enumerate(messages, start=1):
         if not msg or not str(msg).strip():
@@ -173,7 +191,7 @@ def send_many_messages(instance_id, instance_token, client_token, group_id, mess
 # Excel reader
 # =============================
 @st.cache_data(show_spinner=False)
-def read_sheet_fast(file_bytes, sheet_name: str, header_row: int):
+def read_sheet_fast(file_bytes: bytes, sheet_name: str, header_row: int) -> pd.DataFrame:
     wb = load_workbook(BytesIO(file_bytes), read_only=True, data_only=True)
     if sheet_name not in wb.sheetnames:
         raise ValueError(f'Aba "{sheet_name}" não encontrada. Abas: {wb.sheetnames}')
@@ -200,32 +218,43 @@ def read_sheet_fast(file_bytes, sheet_name: str, header_row: int):
 # =============================
 uploaded = st.file_uploader("Envie a planilha (.xlsx ou .xlsm)", type=["xlsx", "xlsm"])
 
+# =============================
+# Sidebar config + secrets
+# =============================
 with st.sidebar:
     st.header("Configurações")
 
-    top_n_banc = st.number_input("Top N por bloco (Crédito bancário)", min_value=1, max_value=20, value=5, step=1)
+    top_n_banc = st.number_input(
+        "Top N por bloco (Crédito bancário)",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1
+    )
     mostrar_apenas_blocos_com_ativos = st.checkbox("Mostrar apenas blocos com ativos", value=True)
 
     st.divider()
     st.subheader("Envio WhatsApp (Z-API) via secrets")
 
-    # Secrets
     secrets_ok = True
     try:
         z_instance_id = st.secrets["zapi"]["instance_id"]
         z_instance_token = st.secrets["zapi"]["instance_token"]
         z_client_token = st.secrets["zapi"]["client_token"]
-        z_group_id = st.secrets["group"]["id"]
+        groups_dict = dict(st.secrets["groups"])  # {nome: groupId}
     except Exception:
         secrets_ok = False
-        z_instance_id = z_instance_token = z_client_token = z_group_id = ""
+        z_instance_id = z_instance_token = z_client_token = ""
+        groups_dict = {}
 
-    if secrets_ok:
+    if secrets_ok and groups_dict:
         st.success("Credenciais carregadas via secrets ✅")
-        st.caption(f"Grupo: {z_group_id}")
+        st.caption("Grupos configurados:")
+        for k, v in groups_dict.items():
+            st.write(f"- {k}: {v}")
     else:
-        st.error("Secrets não configurados ❌")
-        st.caption("Configure em .streamlit/secrets.toml (local) ou App settings → Secrets (Cloud).")
+        st.error("Secrets não configurados corretamente ❌")
+        st.caption("Configure os secrets e reinicie o app.")
 
     delay_between = st.number_input("Pausa entre mensagens (seg)", min_value=0.0, value=2.0, step=0.5)
     api_delay_message = st.number_input("delayMessage (Z-API 0-15)", min_value=0, max_value=15, value=0, step=1)
@@ -323,13 +352,10 @@ with tab_banc:
                             height=260,
                         )
 
-    # =============================
-    # WhatsApp messages (3 campos)
-    # =============================
     st.divider()
     st.subheader("Mensagens prontas para WhatsApp (Crédito bancário)")
 
-    TOP_WA = 5  # fixo para clientes
+    TOP_WA = 5
 
     def format_card_banc(row, prefixo_taxa=""):
         emissor = str(row.get(col_emissor, "")).strip()
@@ -350,7 +376,6 @@ with tab_banc:
 
     def build_message_bancario(indexador_label, titulo_indexador, prefixo_taxa=""):
         data_envio = datetime.now().strftime("%d/%m/%Y")
-
         msg = (
             "*Destaques de ativos Bancários*\n"
             f"🚨*TAXAS DE HOJE ({data_envio})*\n\n"
@@ -417,7 +442,6 @@ with tab_pub:
         st.write("Colunas detectadas:", list(dfp.columns))
         st.stop()
 
-    # Filtro: somente NTN-B
     dfp = dfp[dfp[col_titulo].astype(str).str.upper().str.contains("NTN-B")].copy()
 
     dfp["_venc_dt"] = to_date_series(dfp[col_venc])
@@ -435,7 +459,7 @@ with tab_pub:
     st.dataframe(
         dfp[[col_titulo, "venc_fmt", "taxa_fmt", "horizonte", "prazo_dias"]]
         .sort_values("prazo_dias")
-        .head(120),
+        .head(150),
         use_container_width=True,
         height=340,
     )
@@ -485,41 +509,44 @@ with tab_pub:
     msg_pub_ntnb = build_message_pub_ntnb_all()
 
     st.divider()
-    st.subheader("Mensagem pronta para WhatsApp – Tesouro IPCA+ (todas as NTN-B)")
+    st.subheader("Mensagem pronta para WhatsApp | Tesouro IPCA+ (todas as NTN-B)")
     st.text_area("Mensagem Tesouro IPCA+", value=msg_pub_ntnb, height=560)
     copy_button(msg_pub_ntnb, "Copiar Tesouro IPCA+")
 
 # =========================================================
-# SEND SECTION (1 clique)
+# SEND SECTION (todos os grupos do secrets)
 # =========================================================
 st.divider()
-st.subheader("Enviar para o grupo (1 clique)")
+st.subheader("Enviar para todos os grupos (1 clique)")
 
 messages_to_send = []
-
-# Só adiciona se existirem (evita crash se algum tab não rodou ainda)
 for name in ["msg_pos", "msg_pre", "msg_ipca", "msg_pub_ntnb"]:
     if name in globals():
         messages_to_send.append(globals()[name])
 
-can_send = secrets_ok and len(messages_to_send) >= 1
+can_send = secrets_ok and bool(groups_dict) and len(messages_to_send) >= 1
 
 col_send1, col_send2 = st.columns([1, 2])
 
 with col_send1:
-    if st.button("📤 Enviar 4 mensagens agora", disabled=not can_send):
+    if st.button("📤 Enviar mensagens para TODOS os grupos", disabled=not can_send):
         try:
-            res = send_many_messages(
-                instance_id=z_instance_id,
-                instance_token=z_instance_token,
-                client_token=z_client_token,
-                group_id=z_group_id,
-                messages=messages_to_send,
-                delay_between=delay_between,
-                api_delay_message=api_delay_message if api_delay_message > 0 else 0,
-            )
-            st.success(f"Enviado! Total de mensagens: {len(res)}")
-            st.json(res)
+            all_results = []
+            for gname, gid in groups_dict.items():
+                res = send_many_messages(
+                    instance_id=z_instance_id,
+                    instance_token=z_instance_token,
+                    client_token=z_client_token,
+                    group_id=gid,
+                    messages=messages_to_send,
+                    delay_between=delay_between,
+                    api_delay_message=api_delay_message if api_delay_message > 0 else 0,
+                )
+                all_results.append({"grupo": gname, "group_id": gid, "resultados": res})
+
+            st.success(f"Enviado! Total de grupos: {len(all_results)}")
+            st.json(all_results)
+
         except requests.HTTPError as e:
             st.error("Falha no envio. Resposta do servidor:")
             st.write(getattr(e.response, "text", str(e)))
@@ -527,5 +554,4 @@ with col_send1:
             st.error(f"Erro inesperado: {e}")
 
 with col_send2:
-    st.caption("As credenciais vêm do secrets. Se o texto estiver muito grande, aumente a pausa entre mensagens.")
-
+    st.caption("As credenciais e grupos vêm do secrets. Ajuste a pausa entre mensagens se necessário.")
