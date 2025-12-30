@@ -15,7 +15,7 @@ SHEET_BANCARIO = "Crédito bancário"
 HEADER_BANCARIO = 6
 
 SHEET_PUBLICOS = "Títulos Públicos"
-HEADER_PUBLICOS = 5  # no seu arquivo, títulos costuma estar na linha 5
+HEADER_PUBLICOS = 5  # ajuste se necessário no seu arquivo
 
 # =============================
 # PAGE
@@ -138,7 +138,7 @@ def copy_button(text: str, label: str = "Copiar"):
     components.html(html, height=46)
 
 # =============================
-# Z-API sender (secrets)
+# Z-API (send + metadata)
 # =============================
 def zapi_send_text(
     instance_id: str,
@@ -146,7 +146,8 @@ def zapi_send_text(
     client_token: str,
     phone_or_group: str,
     message: str,
-    delay_message: int = 0
+    delay_message: int = 0,
+    mentioned: list[str] | None = None,
 ):
     url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/send-text"
     headers = {
@@ -154,6 +155,10 @@ def zapi_send_text(
         "Content-Type": "application/json",
     }
     payload = {"phone": phone_or_group, "message": message}
+
+    if mentioned:
+        payload["mentioned"] = mentioned
+
     if delay_message and 1 <= int(delay_message) <= 15:
         payload["delayMessage"] = int(delay_message)
 
@@ -161,31 +166,32 @@ def zapi_send_text(
     r.raise_for_status()
     return r.json()
 
-def send_many_messages(
-    instance_id: str,
-    instance_token: str,
-    client_token: str,
-    group_id: str,
-    messages: list[str],
-    delay_between: float = 2.0,
-    api_delay_message: int = 0
-):
-    results = []
-    for i, msg in enumerate(messages, start=1):
-        if not msg or not str(msg).strip():
-            continue
-        res = zapi_send_text(
-            instance_id=instance_id,
-            instance_token=instance_token,
-            client_token=client_token,
-            phone_or_group=group_id,
-            message=msg,
-            delay_message=api_delay_message,
-        )
-        results.append({"ordem": i, "status": "ok", "response": res})
-        if delay_between:
-            time.sleep(float(delay_between))
-    return results
+def zapi_group_metadata(instance_id: str, instance_token: str, client_token: str, group_id: str):
+    url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata"
+    headers = {"Client-Token": client_token}
+    params = {"phone": group_id}
+    r = requests.get(url, headers=headers, params=params, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+def extract_participants_phones(metadata_json: dict) -> list[str]:
+    participants = metadata_json.get("participants", []) or metadata_json.get("group", {}).get("participants", [])
+    phones = []
+    for p in participants:
+        if isinstance(p, dict):
+            ph = p.get("phone")
+            if ph:
+                phones.append(str(ph))
+        elif isinstance(p, str):
+            phones.append(p)
+    phones = [re.sub(r"\D", "", x) for x in phones if x]
+    phones = list(dict.fromkeys([x for x in phones if x]))
+    return phones
+
+@st.cache_data(show_spinner=False, ttl=600)
+def cached_group_participants(instance_id: str, instance_token: str, client_token: str, group_id: str):
+    meta = zapi_group_metadata(instance_id, instance_token, client_token, group_id)
+    return extract_participants_phones(meta)
 
 # =============================
 # Excel reader
@@ -249,15 +255,37 @@ with st.sidebar:
 
     if secrets_ok and groups_dict:
         st.success("Credenciais carregadas via secrets ✅")
-        st.caption("Grupos configurados:")
-        for k, v in groups_dict.items():
-            st.write(f"- {k}: {v}")
+        st.caption("Grupos configurados (nomes):")
+        for nome_grupo in groups_dict.keys():
+            st.write(f"• {nome_grupo.replace('_', ' ').title()}")
     else:
         st.error("Secrets não configurados corretamente ❌")
-        st.caption("Configure os secrets e reinicie o app.")
+        st.caption('Esperado no secrets: [zapi] e [groups].')
 
     delay_between = st.number_input("Pausa entre mensagens (seg)", min_value=0.0, value=2.0, step=0.5)
     api_delay_message = st.number_input("delayMessage (Z-API 0-15)", min_value=0, max_value=15, value=0, step=1)
+
+    st.divider()
+    st.subheader("Menções (@)")
+
+    mention_all_enabled = st.checkbox("Ativar menção de participantes", value=False)
+
+    max_mentions = st.number_input(
+        "Máx. menções por mensagem",
+        min_value=0,
+        max_value=2000,
+        value=50,
+        step=10
+    )
+
+    mention_groups = []
+    if mention_all_enabled and groups_dict:
+        mention_groups = st.multiselect(
+            "Mencionar todos apenas nestes grupos:",
+            options=list(groups_dict.keys()),
+            default=[],
+        )
+        st.caption("Dica: selecione só grupos internos. Em grupos de clientes, use poucas menções.")
 
 if not uploaded:
     st.info("Envie o arquivo para começar.")
@@ -515,6 +543,8 @@ with tab_pub:
 
 # =========================================================
 # SEND SECTION (todos os grupos do secrets)
+# - Envia para todos os grupos
+# - Só menciona participantes nos grupos selecionados
 # =========================================================
 st.divider()
 st.subheader("Enviar para todos os grupos (1 clique)")
@@ -526,32 +556,84 @@ for name in ["msg_pos", "msg_pre", "msg_ipca", "msg_pub_ntnb"]:
 
 can_send = secrets_ok and bool(groups_dict) and len(messages_to_send) >= 1
 
+info_cols = st.columns([2, 3])
+with info_cols[0]:
+    st.caption("Resumo")
+    st.write(f"Mensagens no pacote: {len(messages_to_send)}")
+    st.write(f"Grupos no secrets: {len(groups_dict) if groups_dict else 0}")
+
+with info_cols[1]:
+    if mention_all_enabled:
+        st.caption("Menções")
+        if mention_groups:
+            nice = ", ".join([g.replace("_", " ").title() for g in mention_groups])
+            st.write(f"Mencionar participantes apenas em: {nice}")
+        else:
+            st.write("Nenhum grupo selecionado para menção.")
+    else:
+        st.caption("Menções desativadas.")
+
 col_send1, col_send2 = st.columns([1, 2])
 
 with col_send1:
-    if st.button("📤 Enviar mensagens para TODOS os grupos", disabled=not can_send):
-        try:
-            all_results = []
-            for gname, gid in groups_dict.items():
-                res = send_many_messages(
-                    instance_id=z_instance_id,
-                    instance_token=z_instance_token,
-                    client_token=z_client_token,
-                    group_id=gid,
-                    messages=messages_to_send,
-                    delay_between=delay_between,
-                    api_delay_message=api_delay_message if api_delay_message > 0 else 0,
-                )
-                all_results.append({"grupo": gname, "group_id": gid, "resultados": res})
+    if st.button("📤 Enviar mensagens agora", disabled=not can_send):
+        all_results = []
+        for gname, gid in groups_dict.items():
+            mentioned_list = None
+            used_mentions = False
 
-            st.success(f"Enviado! Total de grupos: {len(all_results)}")
-            st.json(all_results)
+            if mention_all_enabled and (gname in (mention_groups or [])):
+                try:
+                    phones = cached_group_participants(z_instance_id, z_instance_token, z_client_token, gid)
+                    if int(max_mentions) > 0:
+                        phones = phones[: int(max_mentions)]
+                    mentioned_list = phones
+                    used_mentions = True
+                except Exception as e:
+                    mentioned_list = None
+                    used_mentions = False
+                    st.warning(f"Não consegui carregar participantes do grupo '{gname}'. Enviando sem menção. Erro: {e}")
 
-        except requests.HTTPError as e:
-            st.error("Falha no envio. Resposta do servidor:")
-            st.write(getattr(e.response, "text", str(e)))
-        except Exception as e:
-            st.error(f"Erro inesperado: {e}")
+            group_results = []
+            for i, msg in enumerate(messages_to_send, start=1):
+                if not msg or not str(msg).strip():
+                    continue
+                try:
+                    res = zapi_send_text(
+                        instance_id=z_instance_id,
+                        instance_token=z_instance_token,
+                        client_token=z_client_token,
+                        phone_or_group=gid,
+                        message=msg,
+                        delay_message=api_delay_message if api_delay_message > 0 else 0,
+                        mentioned=mentioned_list,
+                    )
+                    group_results.append({"ordem": i, "ok": True, "response": res})
+                except requests.HTTPError as e:
+                    group_results.append({
+                        "ordem": i,
+                        "ok": False,
+                        "status_code": getattr(e.response, "status_code", None),
+                        "error_text": getattr(e.response, "text", str(e)),
+                    })
+                except Exception as e:
+                    group_results.append({"ordem": i, "ok": False, "error_text": str(e)})
+
+                if delay_between:
+                    time.sleep(float(delay_between))
+
+            all_results.append({
+                "grupo": gname,
+                "mencionou_todos": used_mentions,
+                "qtd_mencoes": 0 if not mentioned_list else len(mentioned_list),
+                "resultados": group_results
+            })
+
+        st.success(f"Envio concluído. Total de grupos: {len(all_results)}")
+        st.json(all_results)
 
 with col_send2:
-    st.caption("As credenciais e grupos vêm do secrets. Ajuste a pausa entre mensagens se necessário.")
+    st.caption(
+        "Dica: se enviar para muitos grupos, aumente a pausa. "
+        "Se marcar pessoas, use poucas menções em grupos de clientes."
+    )
