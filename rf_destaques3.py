@@ -170,38 +170,12 @@ def zapi_send_text(
     return r.json()
 
 def zapi_group_metadata(instance_id: str, instance_token: str, client_token: str, group_id: str):
-    """
-    Implementação robusta:
-    tenta GET e POST, e suporta variações de endpoint.
-    """
+    url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata/{group_id}"
     headers = {"Client-Token": client_token}
-
-    # Tentativa 1: GET com path param
-    url1 = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata/{group_id}"
-    try:
-        r = requests.get(url1, headers=headers, timeout=60)
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code not in (404, 405, 400):
-            r.raise_for_status()
-    except requests.RequestException:
-        pass
-
-    # Tentativa 2: POST com path param
-    try:
-        r = requests.post(url1, headers=headers, timeout=60)
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code not in (404, 405, 400):
-            r.raise_for_status()
-    except requests.RequestException:
-        pass
-
-    # Tentativa 3: GET com query param (fallback)
-    url2 = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata"
-    r = requests.get(url2, headers=headers, params={"phone": group_id}, timeout=60)
+    r = requests.get(url, headers=headers, timeout=60)
     r.raise_for_status()
     return r.json()
+
 
 def extract_participants_phones(metadata_json: dict) -> list[int]:
     """
