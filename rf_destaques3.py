@@ -28,7 +28,7 @@ st.caption(
 )
 
 # =============================
-# Helpers
+# HELPERS
 # =============================
 def normalize_colname(c):
     if c is None:
@@ -86,6 +86,7 @@ def parse_rate_value(x):
         return None
     if isinstance(x, (int, float)):
         return float(x)
+
     s = str(x).upper().replace("%", "").replace(" ", "")
     m = re.search(r"(-?\d[\d\.,]*)", s)
     if not m:
@@ -105,10 +106,12 @@ def format_rate_for_display(rate_num, indexador):
         return ""
     val = float(rate_num)
 
+    # Pós fixado normalmente vem como 1.04 (ou 104) dependendo da planilha
     if indexador == "Pós (CDI)":
         val = val * 100 if val <= 2 else val
         return f"{val:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
 
+    # Pré / IPCA: se vier 0.09, vira 9.00%
     if val <= 1.5:
         val = val * 100
     return f"{val:.2f}%".replace(".", ",")
@@ -138,7 +141,7 @@ def copy_button(text: str, label: str = "Copiar"):
     components.html(html, height=46)
 
 # =============================
-# Z-API (send + metadata)
+# Z-API
 # =============================
 def zapi_send_text(
     instance_id: str,
@@ -147,7 +150,7 @@ def zapi_send_text(
     phone_or_group: str,
     message: str,
     delay_message: int = 0,
-    mentioned: list[str] | None = None,
+    mentioned: list[int] | None = None,
 ):
     url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/send-text"
     headers = {
@@ -156,8 +159,8 @@ def zapi_send_text(
     }
     payload = {"phone": phone_or_group, "message": message}
 
-    if mentioned:
-        payload["mentioned"] = mentioned
+    if mentioned and len(mentioned) > 0:
+        payload["mentioned"] = mentioned  # lista de inteiros
 
     if delay_message and 1 <= int(delay_message) <= 15:
         payload["delayMessage"] = int(delay_message)
@@ -167,26 +170,83 @@ def zapi_send_text(
     return r.json()
 
 def zapi_group_metadata(instance_id: str, instance_token: str, client_token: str, group_id: str):
-    url = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata"
+    """
+    Implementação robusta:
+    tenta GET e POST, e suporta variações de endpoint.
+    """
     headers = {"Client-Token": client_token}
-    params = {"phone": group_id}
-    r = requests.get(url, headers=headers, params=params, timeout=60)
+
+    # Tentativa 1: GET com path param
+    url1 = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata/{group_id}"
+    try:
+        r = requests.get(url1, headers=headers, timeout=60)
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code not in (404, 405, 400):
+            r.raise_for_status()
+    except requests.RequestException:
+        pass
+
+    # Tentativa 2: POST com path param
+    try:
+        r = requests.post(url1, headers=headers, timeout=60)
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code not in (404, 405, 400):
+            r.raise_for_status()
+    except requests.RequestException:
+        pass
+
+    # Tentativa 3: GET com query param (fallback)
+    url2 = f"https://api.z-api.io/instances/{instance_id}/token/{instance_token}/group-metadata"
+    r = requests.get(url2, headers=headers, params={"phone": group_id}, timeout=60)
     r.raise_for_status()
     return r.json()
 
-def extract_participants_phones(metadata_json: dict) -> list[str]:
-    participants = metadata_json.get("participants", []) or metadata_json.get("group", {}).get("participants", [])
-    phones = []
+def extract_participants_phones(metadata_json: dict) -> list[int]:
+    """
+    Extrai participantes e devolve lista de ints (somente dígitos).
+    Suporta variações de chave na resposta.
+    """
+    participants = None
+
+    if isinstance(metadata_json, dict):
+        if "participants" in metadata_json:
+            participants = metadata_json.get("participants")
+        elif "group" in metadata_json and isinstance(metadata_json.get("group"), dict):
+            participants = metadata_json["group"].get("participants")
+        elif "data" in metadata_json and isinstance(metadata_json.get("data"), dict):
+            participants = metadata_json["data"].get("participants")
+
+    participants = participants or []
+
+    raw_phones = []
     for p in participants:
         if isinstance(p, dict):
-            ph = p.get("phone")
+            ph = p.get("phone") or p.get("id") or p.get("jid")
             if ph:
-                phones.append(str(ph))
+                raw_phones.append(ph)
         elif isinstance(p, str):
-            phones.append(p)
-    phones = [re.sub(r"\D", "", x) for x in phones if x]
-    phones = list(dict.fromkeys([x for x in phones if x]))
-    return phones
+            raw_phones.append(p)
+
+    clean = []
+    for x in raw_phones:
+        s = re.sub(r"\D", "", str(x))
+        if not s:
+            continue
+        try:
+            clean.append(int(s))
+        except:
+            continue
+
+    # remove duplicados mantendo ordem
+    seen = set()
+    uniq = []
+    for n in clean:
+        if n not in seen:
+            uniq.append(n)
+            seen.add(n)
+    return uniq
 
 @st.cache_data(show_spinner=False, ttl=600)
 def cached_group_participants(instance_id: str, instance_token: str, client_token: str, group_id: str):
@@ -194,7 +254,7 @@ def cached_group_participants(instance_id: str, instance_token: str, client_toke
     return extract_participants_phones(meta)
 
 # =============================
-# Excel reader
+# EXCEL READER
 # =============================
 @st.cache_data(show_spinner=False)
 def read_sheet_fast(file_bytes: bytes, sheet_name: str, header_row: int) -> pd.DataFrame:
@@ -220,12 +280,12 @@ def read_sheet_fast(file_bytes: bytes, sheet_name: str, header_row: int) -> pd.D
     return df.dropna(axis=1, how="all")
 
 # =============================
-# Upload
+# UPLOAD
 # =============================
 uploaded = st.file_uploader("Envie a planilha (.xlsx ou .xlsm)", type=["xlsx", "xlsm"])
 
 # =============================
-# Sidebar config + secrets
+# SIDEBAR + SECRETS
 # =============================
 with st.sidebar:
     st.header("Configurações")
@@ -287,12 +347,19 @@ with st.sidebar:
         )
         st.caption("Dica: selecione só grupos internos. Em grupos de clientes, use poucas menções.")
 
+    st.divider()
+    st.subheader("Diagnóstico (opcional)")
+    debug_mentions = st.checkbox("Mostrar diagnóstico de menções", value=False)
+
 if not uploaded:
     st.info("Envie o arquivo para começar.")
     st.stop()
 
 file_bytes = uploaded.getvalue()
 
+# =============================
+# TABS
+# =============================
 tab_banc, tab_pub = st.tabs(["Crédito bancário", "Títulos públicos (NTN-B)"])
 
 # =========================================================
@@ -452,7 +519,7 @@ with tab_banc:
 # TAB 2: Títulos públicos (somente NTN-B, listar todas)
 # =========================================================
 with tab_pub:
-    st.subheader("Títulos públicos (Cliente | somente NTN-B | listar todas)")
+    st.subheader("Títulos públicos (somente NTN-B, listar todas)")
 
     dfp = read_sheet_fast(file_bytes, SHEET_PUBLICOS, header_row=HEADER_PUBLICOS)
 
@@ -542,9 +609,9 @@ with tab_pub:
     copy_button(msg_pub_ntnb, "Copiar Tesouro IPCA+")
 
 # =========================================================
-# SEND SECTION (todos os grupos do secrets)
-# - Envia para todos os grupos
-# - Só menciona participantes nos grupos selecionados
+# SEND SECTION
+# - envia para todos os grupos do secrets
+# - menciona participantes apenas nos grupos selecionados
 # =========================================================
 st.divider()
 st.subheader("Enviar para todos os grupos (1 clique)")
@@ -563,21 +630,22 @@ with info_cols[0]:
     st.write(f"Grupos no secrets: {len(groups_dict) if groups_dict else 0}")
 
 with info_cols[1]:
-    if mention_all_enabled:
-        st.caption("Menções")
-        if mention_groups:
-            nice = ", ".join([g.replace("_", " ").title() for g in mention_groups])
-            st.write(f"Mencionar participantes apenas em: {nice}")
-        else:
-            st.write("Nenhum grupo selecionado para menção.")
+    st.caption("Menções")
+    if mention_all_enabled and mention_groups:
+        nice = ", ".join([g.replace("_", " ").title() for g in mention_groups])
+        st.write(f"Mencionar participantes apenas em: {nice}")
+        st.write(f"Máx. menções por mensagem: {int(max_mentions)}")
+    elif mention_all_enabled and not mention_groups:
+        st.write("Menções ativadas, mas nenhum grupo selecionado.")
     else:
-        st.caption("Menções desativadas.")
+        st.write("Menções desativadas.")
 
 col_send1, col_send2 = st.columns([1, 2])
 
 with col_send1:
     if st.button("📤 Enviar mensagens agora", disabled=not can_send):
         all_results = []
+
         for gname, gid in groups_dict.items():
             mentioned_list = None
             used_mentions = False
@@ -589,6 +657,10 @@ with col_send1:
                         phones = phones[: int(max_mentions)]
                     mentioned_list = phones
                     used_mentions = True
+
+                    if debug_mentions:
+                        st.write(f"[DEBUG] {gname}: participantes carregados para menção = {len(mentioned_list)}")
+
                 except Exception as e:
                     mentioned_list = None
                     used_mentions = False
@@ -634,6 +706,6 @@ with col_send1:
 
 with col_send2:
     st.caption(
-        "Dica: se enviar para muitos grupos, aumente a pausa. "
-        "Se marcar pessoas, use poucas menções em grupos de clientes."
+        "Se não mencionar, ative o diagnóstico e confira se a lista de participantes está carregando. "
+        "Se a lista vier 0, o group-metadata não retornou participantes para esse groupId."
     )
